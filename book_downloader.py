@@ -93,12 +93,33 @@ def choose_save_location(filename):
     result, success = run_applescript(script)
     return result if success else None
 
+# 已知的电子书仓库列表
+KNOWN_EBOOK_REPOS = [
+    "fancy88/iBook",
+    "it-ebooks-0/geektime-books", 
+    "hehonghui/awesome-english-ebooks",
+    "forthespada/CS-Books",
+    "imarvinle/awesome-cs-books",
+]
+
 def search_github(book_name):
-    """在 GitHub 上搜索 epub 文件，使用 gh CLI 认证"""
-    query = f"{book_name} extension:epub"
+    """在 GitHub 上搜索 epub 文件"""
+    all_results = []
     
+    # 1. 首先在已知的电子书仓库中搜索
+    for repo in KNOWN_EBOOK_REPOS:
+        results = search_repo_for_epub(repo, book_name)
+        all_results.extend(results)
+        if len(all_results) >= 10:
+            break
+    
+    # 2. 如果找到了就返回
+    if all_results:
+        return all_results[:15]
+    
+    # 3. 尝试使用 gh CLI 搜索
     try:
-        # 使用 gh CLI 进行认证搜索
+        query = f"{book_name} extension:epub"
         result = subprocess.run(
             ['gh', 'api', 'search/code', '-X', 'GET', 
              '-f', f'q={query}', '-f', 'per_page=10'],
@@ -107,28 +128,20 @@ def search_github(book_name):
             timeout=30
         )
         
-        if result.returncode != 0:
-            # 如果 gh 失败，尝试使用仓库搜索（不需要认证）
-            return search_github_repos(book_name)
-        
-        data = json.loads(result.stdout)
-        return data.get('items', [])
-    except FileNotFoundError:
-        # gh CLI 未安装，使用备用方案
-        return search_github_repos(book_name)
-    except Exception as e:
-        show_alert("搜索失败", str(e), is_error=True)
-        return []
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            items = data.get('items', [])
+            if items:
+                return items
+    except:
+        pass
+    
+    # 4. 备用：搜索仓库名
+    return search_github_repos(book_name)
 
 def search_github_repos(book_name):
-    """备用方案：搜索仓库中的 epub 文件"""
-    # 搜索包含电子书的知名仓库
-    known_repos = [
-        "https://api.github.com/repos/iamseancheney/python_for_data_analysis_2nd_chinese_version/contents",
-    ]
-    
-    # 使用仓库搜索 API（不需要认证）
-    query = urllib.parse.quote(f"{book_name} epub in:path")
+    """搜索包含关键词的仓库"""
+    query = urllib.parse.quote(f"{book_name} epub")
     url = f"https://api.github.com/search/repositories?q={query}&per_page=5"
     
     headers = {
@@ -173,22 +186,29 @@ def search_repo_for_epub(repo_name, book_name):
             tree = data.get('tree', [])
             
             results = []
-            book_name_lower = book_name.lower()
+            # 分割搜索词以支持多关键词搜索
+            keywords = [k.strip() for k in book_name.replace('，', ' ').replace(',', ' ').split() if k.strip()]
             
             for item in tree:
                 path = item.get('path', '')
                 if path.endswith('.epub'):
                     filename = os.path.basename(path)
-                    # 检查文件名是否匹配搜索词
-                    if book_name_lower in filename.lower() or book_name_lower in path.lower():
-                        results.append({
-                            'name': filename,
-                            'path': path,
-                            'repository': {'full_name': repo_name}
-                        })
+                    # 检查文件名是否包含任一关键词（中文直接比较，英文忽略大小写）
+                    path_lower = path.lower()
+                    filename_lower = filename.lower()
+                    
+                    for keyword in keywords:
+                        kw_lower = keyword.lower()
+                        if keyword in path or keyword in filename or kw_lower in path_lower or kw_lower in filename_lower:
+                            results.append({
+                                'name': filename,
+                                'path': path,
+                                'repository': {'full_name': repo_name}
+                            })
+                            break
             
             return results
-    except:
+    except Exception as e:
         return []
 
 def download_file(url, filepath):
