@@ -112,51 +112,96 @@ KNOWN_EBOOK_REPOS = [
     "woai3c/recommended-books",
 ]
 
-def show_searching_dialog():
-    """显示搜索中的对话框"""
-    script = '''
-    tell application "System Events"
-        activate
-        display dialog "🔍 正在搜索中...
-
-正在扫描多个电子书仓库，请稍候..." with title "搜索中" buttons {"取消"} giving up after 1 with icon note
-    end tell
-    '''
-    # 异步显示，不等待结果
-    subprocess.Popen(['osascript', '-e', script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-def close_dialog():
-    """关闭对话框"""
-    script = '''
-    tell application "System Events"
-        try
-            click button "取消" of window 1
-        end try
-    end tell
-    '''
-    subprocess.run(['osascript', '-e', script], capture_output=True)
-
-def search_github(book_name, progress_callback=None):
-    """在 GitHub 上搜索 epub 文件"""
-    all_results = []
-    total_repos = len(KNOWN_EBOOK_REPOS)
+class ProgressWindow:
+    """使用 osascript 创建进度窗口"""
     
-    # 1. 首先在已知的电子书仓库中搜索
-    for i, repo in enumerate(KNOWN_EBOOK_REPOS):
-        # 显示进度通知
-        show_progress_notification("搜索中", f"正在扫描: {repo.split('/')[-1]} ({i+1}/{total_repos})")
+    def __init__(self):
+        self.process = None
+    
+    def show(self, title, message):
+        """显示进度窗口"""
+        # 使用 Script Editor 显示进度
+        script = f'''
+        tell application "Script Editor"
+            activate
+        end tell
         
-        results = search_repo_for_epub(repo, book_name)
+        set progress total steps to 100
+        set progress completed steps to 0
+        set progress description to "{title}"
+        set progress additional description to "{message}"
+        '''
+        # 这个方法在 Script Editor 中显示进度，但用户体验不好
+        # 改用自定义方案
+        pass
+    
+    def update(self, current, total, message):
+        """更新进度"""
+        pass
+    
+    def close(self):
+        """关闭窗口"""
+        pass
+
+def show_progress_window(title, message, repo_list, search_func, book_name):
+    """显示搜索进度并执行搜索"""
+    total = len(repo_list)
+    all_results = []
+    
+    for i, repo in enumerate(repo_list):
+        # 更新进度对话框
+        progress = int((i / total) * 100)
+        progress_bar = "█" * (progress // 5) + "░" * (20 - progress // 5)
+        
+        status_msg = f"搜索进度: {i+1}/{total}\n\n{progress_bar} {progress}%\n\n正在扫描: {repo.split('/')[-1]}"
+        
+        # 显示当前进度（使用自动关闭的对话框）
+        script = f'''
+        tell application "System Events"
+            activate
+            display dialog "{status_msg}" with title "🔍 {title}" buttons {{"取消搜索"}} giving up after 1 with icon note
+        end tell
+        '''
+        
+        # 异步显示进度
+        proc = subprocess.Popen(['osascript', '-e', script], 
+                               stdout=subprocess.PIPE, 
+                               stderr=subprocess.PIPE)
+        
+        # 执行搜索
+        results = search_func(repo, book_name)
         all_results.extend(results)
+        
+        # 结束进度对话框
+        try:
+            proc.terminate()
+        except:
+            pass
+        
+        # 如果找到足够多结果，提前结束
         if len(all_results) >= 20:
             break
     
-    # 2. 如果找到了就返回
-    if all_results:
-        return all_results[:15]
+    return all_results
+
+def search_github(book_name):
+    """在 GitHub 上搜索 epub 文件，显示 UI 进度"""
+    # 使用进度窗口搜索
+    all_results = show_progress_window(
+        f"搜索: {book_name}",
+        "正在扫描电子书仓库...",
+        KNOWN_EBOOK_REPOS,
+        search_repo_for_epub,
+        book_name
+    )
     
-    # 3. 尝试使用 gh CLI 搜索
+    # 如果找到了就返回
+    if all_results:
+        return all_results[:20]
+    
+    # 尝试使用 gh CLI 搜索
     try:
+        show_progress_notification("搜索中", "正在使用 GitHub API 搜索...")
         query = f"{book_name} extension:epub"
         result = subprocess.run(
             ['gh', 'api', 'search/code', '-X', 'GET', 
@@ -174,8 +219,7 @@ def search_github(book_name, progress_callback=None):
     except:
         pass
     
-    # 4. 备用：搜索仓库名
-    return search_github_repos(book_name)
+    return []
 
 def search_github_repos(book_name):
     """搜索包含关键词的仓库"""
@@ -274,15 +318,12 @@ def sanitize_filename(name):
 
 def main():
     # 获取书名
-    book_name = show_input_dialog("📚 电子书下载器", "请输入要搜索的书名（支持中英文）:")
+    book_name = show_input_dialog("📚 电子书下载器", "请输入要搜索的书名:")
     
     if not book_name:
         sys.exit(0)
     
-    # 显示搜索开始提示
-    show_alert("🔍 开始搜索", f"正在搜索: {book_name}\n\n将扫描 {len(KNOWN_EBOOK_REPOS)} 个电子书仓库，请查看通知中心了解进度...")
-    
-    # 搜索
+    # 搜索（会显示进度窗口）
     results = search_github(book_name)
     
     if not results:
