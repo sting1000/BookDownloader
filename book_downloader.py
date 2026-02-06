@@ -96,21 +96,59 @@ def choose_save_location(filename):
 # 已知的电子书仓库列表
 KNOWN_EBOOK_REPOS = [
     "fancy88/iBook",
-    "it-ebooks-0/geektime-books", 
+    "threerocks/studyFiles",
+    "gedoor/legado",
     "hehonghui/awesome-english-ebooks",
+    "itdevbooks/pdf",
     "forthespada/CS-Books",
     "imarvinle/awesome-cs-books",
+    "Tyson0314/java-books",
+    "justjavac/free-programming-books-zh_CN",
+    "EbookFoundation/free-programming-books",
+    "programthink/books",
+    "royeo/awesome-programming-books",
+    "XiangLinPro/IT_book",
+    "tangtangcoding/C-C-",
+    "woai3c/recommended-books",
 ]
 
-def search_github(book_name):
+def show_searching_dialog():
+    """显示搜索中的对话框"""
+    script = '''
+    tell application "System Events"
+        activate
+        display dialog "🔍 正在搜索中...
+
+正在扫描多个电子书仓库，请稍候..." with title "搜索中" buttons {"取消"} giving up after 1 with icon note
+    end tell
+    '''
+    # 异步显示，不等待结果
+    subprocess.Popen(['osascript', '-e', script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+def close_dialog():
+    """关闭对话框"""
+    script = '''
+    tell application "System Events"
+        try
+            click button "取消" of window 1
+        end try
+    end tell
+    '''
+    subprocess.run(['osascript', '-e', script], capture_output=True)
+
+def search_github(book_name, progress_callback=None):
     """在 GitHub 上搜索 epub 文件"""
     all_results = []
+    total_repos = len(KNOWN_EBOOK_REPOS)
     
     # 1. 首先在已知的电子书仓库中搜索
-    for repo in KNOWN_EBOOK_REPOS:
+    for i, repo in enumerate(KNOWN_EBOOK_REPOS):
+        # 显示进度通知
+        show_progress_notification("搜索中", f"正在扫描: {repo.split('/')[-1]} ({i+1}/{total_repos})")
+        
         results = search_repo_for_epub(repo, book_name)
         all_results.extend(results)
-        if len(all_results) >= 10:
+        if len(all_results) >= 20:
             break
     
     # 2. 如果找到了就返回
@@ -236,20 +274,20 @@ def sanitize_filename(name):
 
 def main():
     # 获取书名
-    book_name = show_input_dialog("📚 电子书下载器", "请输入要搜索的书名:")
+    book_name = show_input_dialog("📚 电子书下载器", "请输入要搜索的书名（支持中英文）:")
     
     if not book_name:
         sys.exit(0)
     
-    show_progress_notification("搜索中", f"正在搜索: {book_name}")
+    # 显示搜索开始提示
+    show_alert("🔍 开始搜索", f"正在搜索: {book_name}\n\n将扫描 {len(KNOWN_EBOOK_REPOS)} 个电子书仓库，请查看通知中心了解进度...")
     
     # 搜索
     results = search_github(book_name)
     
     if not results:
-        show_alert("未找到", "未找到相关电子书，请尝试其他书名或关键词")
-        # 重新开始
-        main()
+        if ask_yes_no("未找到", "未找到相关电子书\n\n建议：\n• 尝试更简短的关键词\n• 使用书名中的核心词\n\n是否重新搜索？"):
+            main()
         return
     
     # 显示结果列表
