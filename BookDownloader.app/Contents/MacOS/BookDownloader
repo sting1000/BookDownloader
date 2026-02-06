@@ -1,0 +1,4 @@
+#!/bin/bash
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+SCRIPT_DIR="$(dirname "$(dirname "$(dirname "$DIR")")")"
+/usr/bin/python3 "$SCRIPT_DIR/book_downloader.py"
