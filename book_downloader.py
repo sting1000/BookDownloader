@@ -112,75 +112,111 @@ KNOWN_EBOOK_REPOS = [
     "woai3c/recommended-books",
 ]
 
-class ProgressWindow:
-    """使用 osascript 创建进度窗口"""
+def create_progress_html(book_name):
+    """创建进度显示 HTML 文件"""
+    html_path = '/tmp/book_search_progress.html'
+    html_content = f'''
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="refresh" content="1">
+    <title>搜索中 - {book_name}</title>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, sans-serif; 
+               padding: 40px; text-align: center; background: #f5f5f7; }}
+        .container {{ background: white; padding: 30px; border-radius: 12px; 
+                     box-shadow: 0 2px 10px rgba(0,0,0,0.1); max-width: 400px; margin: 0 auto; }}
+        h2 {{ color: #333; margin-bottom: 20px; }}
+        .progress-bar {{ background: #e0e0e0; border-radius: 10px; height: 20px; overflow: hidden; }}
+        .progress-fill {{ background: linear-gradient(90deg, #007aff, #5856d6); height: 100%; 
+                         transition: width 0.3s; }}
+        .status {{ margin-top: 15px; color: #666; }}
+        .repo {{ font-size: 14px; color: #999; margin-top: 10px; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>🔍 正在搜索: {book_name}</h2>
+        <div class="progress-bar"><div class="progress-fill" style="width: 0%"></div></div>
+        <div class="status">准备中...</div>
+        <div class="repo"></div>
+    </div>
+</body>
+</html>
+'''
+    with open(html_path, 'w', encoding='utf-8') as f:
+        f.write(html_content)
+    return html_path
+
+def update_progress_html(current, total, repo_name, found_count):
+    """更新进度 HTML"""
+    html_path = '/tmp/book_search_progress.html'
+    progress = int((current / total) * 100)
     
-    def __init__(self):
-        self.process = None
-    
-    def show(self, title, message):
-        """显示进度窗口"""
-        # 使用 Script Editor 显示进度
-        script = f'''
-        tell application "Script Editor"
-            activate
-        end tell
+    try:
+        with open(html_path, 'r', encoding='utf-8') as f:
+            content = f.read()
         
-        set progress total steps to 100
-        set progress completed steps to 0
-        set progress description to "{title}"
-        set progress additional description to "{message}"
-        '''
-        # 这个方法在 Script Editor 中显示进度，但用户体验不好
-        # 改用自定义方案
-        pass
-    
-    def update(self, current, total, message):
-        """更新进度"""
-        pass
-    
-    def close(self):
-        """关闭窗口"""
+        # 更新进度条
+        content = content.replace(
+            'style="width: 0%"', f'style="width: {progress}%"'
+        ).replace(
+            f'style="width: {progress-int(100/total)}%"', f'style="width: {progress}%"'
+        )
+        
+        # 更新状态文字
+        import re
+        content = re.sub(
+            r'<div class="status">.*?</div>',
+            f'<div class="status">进度: {current}/{total} ({progress}%) - 已找到 {found_count} 本</div>',
+            content
+        )
+        content = re.sub(
+            r'<div class="repo">.*?</div>',
+            f'<div class="repo">正在扫描: {repo_name}</div>',
+            content
+        )
+        
+        with open(html_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+    except:
         pass
 
-def show_progress_window(title, message, repo_list, search_func, book_name):
+def show_progress_window(title, book_name, repo_list, search_func):
     """显示搜索进度并执行搜索"""
     total = len(repo_list)
     all_results = []
     
+    # 创建并打开进度页面
+    html_path = create_progress_html(book_name)
+    browser_proc = subprocess.Popen(
+        ['open', '-a', 'Safari', html_path],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
+    )
+    
+    import time
+    time.sleep(0.5)  # 等待浏览器打开
+    
     for i, repo in enumerate(repo_list):
-        # 更新进度对话框
-        progress = int((i / total) * 100)
-        progress_bar = "█" * (progress // 5) + "░" * (20 - progress // 5)
-        
-        status_msg = f"搜索进度: {i+1}/{total}\n\n{progress_bar} {progress}%\n\n正在扫描: {repo.split('/')[-1]}"
-        
-        # 显示当前进度（使用自动关闭的对话框）
-        script = f'''
-        tell application "System Events"
-            activate
-            display dialog "{status_msg}" with title "🔍 {title}" buttons {{"取消搜索"}} giving up after 1 with icon note
-        end tell
-        '''
-        
-        # 异步显示进度
-        proc = subprocess.Popen(['osascript', '-e', script], 
-                               stdout=subprocess.PIPE, 
-                               stderr=subprocess.PIPE)
+        # 更新进度
+        update_progress_html(i + 1, total, repo.split('/')[-1], len(all_results))
         
         # 执行搜索
         results = search_func(repo, book_name)
         all_results.extend(results)
         
-        # 结束进度对话框
-        try:
-            proc.terminate()
-        except:
-            pass
-        
         # 如果找到足够多结果，提前结束
         if len(all_results) >= 20:
             break
+    
+    # 关闭进度页面
+    subprocess.run(['osascript', '-e', '''
+        tell application "Safari"
+            close (every tab of every window whose URL contains "book_search_progress")
+        end tell
+    '''], capture_output=True)
     
     return all_results
 
@@ -189,10 +225,9 @@ def search_github(book_name):
     # 使用进度窗口搜索
     all_results = show_progress_window(
         f"搜索: {book_name}",
-        "正在扫描电子书仓库...",
+        book_name,
         KNOWN_EBOOK_REPOS,
-        search_repo_for_epub,
-        book_name
+        search_repo_for_epub
     )
     
     # 如果找到了就返回
