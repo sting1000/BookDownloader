@@ -94,9 +94,42 @@ def choose_save_location(filename):
     return result if success else None
 
 def search_github(book_name):
-    """在 GitHub 上搜索 epub 文件"""
-    query = urllib.parse.quote(f"{book_name} extension:epub")
-    url = f"https://api.github.com/search/code?q={query}&per_page=10"
+    """在 GitHub 上搜索 epub 文件，使用 gh CLI 认证"""
+    query = f"{book_name} extension:epub"
+    
+    try:
+        # 使用 gh CLI 进行认证搜索
+        result = subprocess.run(
+            ['gh', 'api', 'search/code', '-X', 'GET', 
+             '-f', f'q={query}', '-f', 'per_page=10'],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        if result.returncode != 0:
+            # 如果 gh 失败，尝试使用仓库搜索（不需要认证）
+            return search_github_repos(book_name)
+        
+        data = json.loads(result.stdout)
+        return data.get('items', [])
+    except FileNotFoundError:
+        # gh CLI 未安装，使用备用方案
+        return search_github_repos(book_name)
+    except Exception as e:
+        show_alert("搜索失败", str(e), is_error=True)
+        return []
+
+def search_github_repos(book_name):
+    """备用方案：搜索仓库中的 epub 文件"""
+    # 搜索包含电子书的知名仓库
+    known_repos = [
+        "https://api.github.com/repos/iamseancheney/python_for_data_analysis_2nd_chinese_version/contents",
+    ]
+    
+    # 使用仓库搜索 API（不需要认证）
+    query = urllib.parse.quote(f"{book_name} epub in:path")
+    url = f"https://api.github.com/search/repositories?q={query}&per_page=5"
     
     headers = {
         "Accept": "application/vnd.github.v3+json",
@@ -108,9 +141,54 @@ def search_github(book_name):
     try:
         with urllib.request.urlopen(req, timeout=30) as response:
             data = json.loads(response.read().decode('utf-8'))
-            return data.get('items', [])
+            repos = data.get('items', [])
+            
+            # 在找到的仓库中搜索 epub 文件
+            results = []
+            for repo in repos[:3]:  # 只检查前3个仓库
+                epub_files = search_repo_for_epub(repo['full_name'], book_name)
+                results.extend(epub_files)
+                if len(results) >= 10:
+                    break
+            
+            return results
     except Exception as e:
         show_alert("搜索失败", str(e), is_error=True)
+        return []
+
+def search_repo_for_epub(repo_name, book_name):
+    """在指定仓库中搜索 epub 文件"""
+    url = f"https://api.github.com/repos/{repo_name}/git/trees/HEAD?recursive=1"
+    
+    headers = {
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "BookDownloader/1.0"
+    }
+    
+    req = urllib.request.Request(url, headers=headers)
+    
+    try:
+        with urllib.request.urlopen(req, timeout=15) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            tree = data.get('tree', [])
+            
+            results = []
+            book_name_lower = book_name.lower()
+            
+            for item in tree:
+                path = item.get('path', '')
+                if path.endswith('.epub'):
+                    filename = os.path.basename(path)
+                    # 检查文件名是否匹配搜索词
+                    if book_name_lower in filename.lower() or book_name_lower in path.lower():
+                        results.append({
+                            'name': filename,
+                            'path': path,
+                            'repository': {'full_name': repo_name}
+                        })
+            
+            return results
+    except:
         return []
 
 def download_file(url, filepath):
